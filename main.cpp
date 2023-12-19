@@ -4,6 +4,8 @@
 #include <algorithm>
 // some headers for timing and random number generation
 
+const int ROW_COL_PARALLEL_INNER_TILING_SIZE = 32;
+
 // ! Native Implementation
 template <int rows, int columns, int inners> // template parameters, compile time constants
 inline void matmulImplNative(const float *left, const float *right, float *result)
@@ -31,9 +33,10 @@ inline void matmulImplNativeRegisterAcc(const float *left, const float *right, f
 {
     for (int row = 0; row < rows; row++)
     {
-        for (int col = 0; col < cols; col++)
+        for (int col = 0; col < columns; col++)
         {
-            float acc = 0.0 for (int inner = 0; inner < inners; inner++)
+            float acc = 0.0;
+            for (int inner = 0; inner < inners; inner++)
             {
                 acc += left[row * columns + inner] * right[inner * columns + col];
             }
@@ -54,7 +57,7 @@ inline void matmulImplLoopOrder(const float *left, const float *right, float *re
 {
     for (int row = 0; row < rows; row++)
     {
-        for (int inner = 0; inner < inners, inner++)
+        for (int inner = 0; inner < inners; inner++)
         {
             for (int col = 0; col < columns; col++)
             {
@@ -75,7 +78,7 @@ inline void matmulImplTiling(const float *left, const float *right, float *resul
             int innerTileEnd = std::min(inners, innerTile + tileSize);
             for (int inner = innerTile; inner < innerTileEnd; inner++)
             {
-                for (int column = 0; column < columns, column++)
+                for (int column = 0; column < columns; column++)
                 {
                     result[row * columns + column] += left[row * inners + inner] * right[inner * columns + column];
                 }
@@ -90,8 +93,9 @@ inline void matmulImplTiling(const float *left, const float *right, float *resul
 template <int rows, int columns, int inners, int tileSize = ROW_COL_PARALLEL_INNER_TILING_SIZE>
 inline void matmulImplRowColParallelInnerTiling(const float *left, const float *right, float *result)
 {
-    #pragma omp parallel for shared(result, left, right) default(none) \ // this is an OpenMP pragma, which tells the compiler to parallelize the following loop
-        collapse(2) num_threads(8) // collapse(2) means that the two outer loops are collapsed into one loop, which is then parallelized
+#pragma omp parallel for shared(result, left, right) default(none) collapse(2) num_threads(8)
+    // this is an OpenMP pragma, which tells the compiler to parallelize the following loop
+    // collapse(2) means that the two outer loops are collapsed into one loop, which is then parallelized
     for (int rowTile = 0; rowTile < rows; rowTile += 256)
     {
         for (int columnTile = 0; columnTile < columns; columnTile += 256)
@@ -116,6 +120,73 @@ inline void matmulImplRowColParallelInnerTiling(const float *left, const float *
 
 int main()
 {
-    // TODO: get some matricies and time each implementation
+    // placeholder, modify these as needed
+    const int rows = 1024;
+    const int columns = 1024;
+    const int inners = 1024;
+    const int tileSize = 256;
+
+    // init matrices
+    std::vector<float> A(rows * inners), B(inners * columns), C(rows * columns);
+
+    // Fill A and B with random values
+    std::random_device rd;                          // obtain a random number from hardware
+    std::mt19937 gen(rd());                         // seed the generator
+    std::uniform_real_distribution<> dis(0.0, 1.0); // define the range of the distribution
+
+    for (auto &a : A)
+        a = dis(gen);
+    for (auto &b : B)
+        b = dis(gen);
+    auto resetC = [&]()
+    { std::fill(C.begin(), C.end(), 0.0f); };
+
+    // Timing each implementation
+    auto start = std::chrono::high_resolution_clock::now(); // start the timer
+    auto end = start;                                       // end the timer
+
+    // Native Implementation
+    resetC();
+
+    start = std::chrono::high_resolution_clock::now();
+    matmulImplNative<rows, columns, inners>(A.data(), B.data(), C.data());
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Native Implementation: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+              << "ms" << std::endl;
+
+    // Native Implementation with Register Accumulation
+    resetC();
+
+    start = std::chrono::high_resolution_clock::now();
+    matmulImplNativeRegisterAcc<rows, columns, inners>(A.data(), B.data(), C.data());
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Native Implementation with Register Accumulation: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+              << "ms" << std::endl;
+
+    // Cache Aware Loop Reorder
+    resetC();
+
+    start = std::chrono::high_resolution_clock::now();
+    matmulImplLoopOrder<rows, columns, inners>(A.data(), B.data(), C.data());
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Cache Aware Loop Reorder: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+              << "ms" << std::endl;
+
+    // Loop Reorder Plus L1 Tiling on I
+    resetC();
+
+    start = std::chrono::high_resolution_clock::now();
+    matmulImplTiling<rows, columns, inners, tileSize>(A.data(), B.data(), C.data());
+    end = std::chrono::high_resolution_clock::now();
+    std::cout << "Loop Reorder Plus L1 Tiling on I: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+              << "ms" << std::endl;
+
+    // Multithreaded Implementation
+    // TODO: test this
+
     return 0;
 }
